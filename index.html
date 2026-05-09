@@ -74,6 +74,48 @@
   td.cell .winner-badge {
     display: block; font-size: 9px; color: var(--gold); font-weight: 700; margin-top: 2px;
   }
+  td.cell.bubble {
+    box-shadow: inset 0 0 0 3px #00e5ff, 0 0 12px rgba(0, 229, 255, 0.55);
+    animation: bubblePulse 1.6s ease-in-out infinite;
+  }
+  @keyframes bubblePulse {
+    0%, 100% { box-shadow: inset 0 0 0 3px #00e5ff, 0 0 8px rgba(0, 229, 255, 0.4); }
+    50%      { box-shadow: inset 0 0 0 3px #00e5ff, 0 0 18px rgba(0, 229, 255, 0.85); }
+  }
+  td.cell .bubble-badge {
+    display: block; font-size: 9px; color: #00e5ff; font-weight: 700; margin-top: 2px;
+  }
+  .live-header {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .live-status { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; }
+  .live-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #ff4d4d; box-shadow: 0 0 10px #ff4d4d;
+    animation: livePulse 1.2s ease-in-out infinite;
+  }
+  .live-dot.final { background: var(--muted); box-shadow: none; animation: none; }
+  .live-dot.pre   { background: var(--gold); box-shadow: 0 0 10px var(--gold); animation: none; }
+  .live-dot.error { background: #888; box-shadow: none; animation: none; }
+  @keyframes livePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.5; transform: scale(0.85); }
+  }
+  .bubble-card {
+    background: linear-gradient(135deg, rgba(0,229,255,0.12), rgba(0,229,255,0.02));
+    border: 1px solid rgba(0,229,255,0.45);
+    border-radius: 8px; padding: 14px; margin-top: 10px;
+  }
+  .bubble-label { font-size: 11px; color: #7ee9f5; text-transform: uppercase; letter-spacing: 1px; }
+  .bubble-name { font-size: 26px; font-weight: 800; margin: 4px 0 2px; }
+  .bubble-digits { font-size: 13px; color: var(--muted); }
+  .live-meta { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .live-error { color: #ff8a8a; font-size: 12px; margin-top: 8px; }
+  .live-scoreboard-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .live-scoreboard-mini .card { background: #0c0e13; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .live-scoreboard-mini .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .live-scoreboard-mini .val { font-size: 22px; font-weight: 800; }
   .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
   .controls > .field { flex: 1 1 120px; }
   .scoreboard { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
@@ -133,6 +175,34 @@
     <p class="note" id="boardHint" style="margin-top: 8px;">
       Rows = <span style="color: var(--wolves-accent);">Wolves</span> last digit. Columns = <span style="color: var(--spurs-accent);">Spurs</span> last digit.
     </p>
+  </div>
+
+  <!-- LIVE TRACKER -->
+  <div id="liveSection" class="panel hidden-section">
+    <div class="live-header">
+      <div class="live-status">
+        <span class="live-dot" id="liveDot"></span>
+        <span id="liveStatusText">Loading…</span>
+      </div>
+      <button id="liveRefreshBtn">↻ Refresh</button>
+    </div>
+    <div class="live-scoreboard-mini">
+      <div class="card">
+        <div class="lbl">Wolves</div>
+        <div class="val" id="liveWolves">--</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Spurs</div>
+        <div class="val" id="liveSpurs">--</div>
+      </div>
+    </div>
+    <div class="bubble-card" id="bubbleCard">
+      <div class="bubble-label">In the bubble right now</div>
+      <div class="bubble-name" id="bubbleName">--</div>
+      <div class="bubble-digits" id="bubbleDigits">--</div>
+    </div>
+    <div class="live-meta" id="liveMeta">Auto-refresh every 60s</div>
+    <div class="live-error" id="liveError" style="display:none;"></div>
   </div>
 
   <!-- SCORING -->
@@ -288,9 +358,10 @@
         Object.entries(state.winners).forEach(([q, w]) => {
           if (w.row === r && w.col === c) winLabels.push(QUARTER_LABELS[q]);
         });
+        const isBubble = liveBubble && liveBubble.row === r && liveBubble.col === c;
         const cellClasses = ['cell'];
-        winLabels.forEach((_, i) => cellClasses.push(`win-q${i+1}`));
         if (winLabels.length > 0) cellClasses.push('win-q1');
+        if (isBubble) cellClasses.push('bubble');
 
         const cell = el('td', {
           class: cellClasses.join(' '),
@@ -299,6 +370,9 @@
           el('div', { class: 'name' }, state.players[playerIdx]),
           winLabels.length > 0
             ? el('div', { class: 'winner-badge' }, '★ ' + winLabels.join(' / '))
+            : null,
+          isBubble && winLabels.length === 0
+            ? el('div', { class: 'bubble-badge' }, '◉ LIVE')
             : null
         ]);
         tr.appendChild(cell);
@@ -336,12 +410,14 @@
     document.getElementById('setup').classList.add('hidden-section');
     document.getElementById('boardSection').classList.remove('hidden-section');
     document.getElementById('scoringSection').classList.toggle('hidden-section', !state.revealed);
+    document.getElementById('liveSection').classList.toggle('hidden-section', !state.revealed);
     renderLegend();
     renderBoard();
     renderWinners();
     renderScores();
     document.getElementById('revealBtn').disabled = state.revealed;
     document.getElementById('revealBtn').textContent = state.revealed ? 'Numbers Revealed' : 'Reveal Numbers';
+    if (state.revealed) startLive();
   }
 
   function showSetup() {
@@ -399,6 +475,111 @@
 
   ['wolvesScore', 'spursScore'].forEach(id => {
     document.getElementById(id).addEventListener('input', renderScores);
+  });
+
+  // --- Live tracker ---
+  const LIVE_GAME_ID = '401871154'; // Wolves vs Spurs, May 8 2026 (Game 3 W. Semis)
+  const LIVE_API = `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=${LIVE_GAME_ID}`;
+  const REFRESH_MS = 60_000;
+  let liveBubble = null;
+  let liveTimer = null;
+  let metaTimer = null;
+  let lastFetchedAt = null;
+
+  async function fetchLive() {
+    const dot = document.getElementById('liveDot');
+    const statusText = document.getElementById('liveStatusText');
+    const errBox = document.getElementById('liveError');
+    errBox.style.display = 'none';
+    try {
+      const res = await fetch(LIVE_API, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const comp = data.header.competitions[0];
+      let wolves = 0, spurs = 0;
+      comp.competitors.forEach(c => {
+        const ab = c.team.abbreviation;
+        const sc = parseInt(c.score, 10) || 0;
+        if (ab === 'MIN') wolves = sc;
+        else if (ab === 'SA') spurs = sc;
+      });
+      const stType = comp.status.type;
+      const state = stType.state; // 'pre' | 'in' | 'post'
+      const detail = stType.shortDetail || stType.detail || '';
+
+      document.getElementById('liveWolves').textContent = wolves;
+      document.getElementById('liveSpurs').textContent = spurs;
+
+      if (state === 'pre') {
+        dot.className = 'live-dot pre';
+        statusText.textContent = detail || 'Tip-off pending';
+      } else if (state === 'post') {
+        dot.className = 'live-dot final';
+        statusText.textContent = 'FINAL — ' + detail;
+      } else {
+        dot.className = 'live-dot';
+        statusText.textContent = 'LIVE — ' + detail;
+      }
+
+      updateBubble(wolves, spurs, state);
+      lastFetchedAt = Date.now();
+      renderLiveMeta();
+    } catch (e) {
+      document.getElementById('liveError').style.display = 'block';
+      document.getElementById('liveError').textContent = "Couldn't reach ESPN: " + e.message;
+      dot.className = 'live-dot error';
+    }
+  }
+
+  function updateBubble(wolves, spurs, gameState) {
+    if (!state || !state.revealed) return;
+    if (gameState === 'pre') { liveBubble = null; renderBoard(); renderBubbleCard(null); return; }
+    const wDigit = (wolves || 0) % 10;
+    const sDigit = (spurs || 0) % 10;
+    const row = state.rowDigits.indexOf(wDigit);
+    const col = state.colDigits.indexOf(sDigit);
+    if (row < 0 || col < 0) { liveBubble = null; renderBoard(); renderBubbleCard(null); return; }
+    const playerIdx = state.assignments[row * 10 + col];
+    liveBubble = { row, col, playerIdx, wolves, spurs };
+    renderBoard();
+    renderBubbleCard(liveBubble);
+  }
+
+  function renderBubbleCard(b) {
+    const nameEl = document.getElementById('bubbleName');
+    const digitsEl = document.getElementById('bubbleDigits');
+    if (!b) {
+      nameEl.textContent = '--';
+      nameEl.style.color = '';
+      digitsEl.textContent = 'Game has not started';
+      return;
+    }
+    nameEl.textContent = state.players[b.playerIdx];
+    nameEl.style.color = COLORS[b.playerIdx];
+    digitsEl.textContent = `Wolves ${b.wolves} · Spurs ${b.spurs} → square (${state.rowDigits[b.row]}, ${state.colDigits[b.col]})`;
+  }
+
+  function renderLiveMeta() {
+    const meta = document.getElementById('liveMeta');
+    if (!lastFetchedAt) { meta.textContent = 'Auto-refresh every 60s'; return; }
+    const secs = Math.floor((Date.now() - lastFetchedAt) / 1000);
+    const ago = secs < 5 ? 'just now' : secs + 's ago';
+    meta.textContent = `Updated ${ago} · auto-refreshing every 60s`;
+  }
+
+  function startLive() {
+    if (liveTimer) return;
+    fetchLive();
+    liveTimer = setInterval(fetchLive, REFRESH_MS);
+    metaTimer = setInterval(renderLiveMeta, 1000);
+  }
+  function stopLive() {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    if (metaTimer) { clearInterval(metaTimer); metaTimer = null; }
+  }
+
+  document.getElementById('liveRefreshBtn').addEventListener('click', () => {
+    fetchLive();
   });
 
   // --- Boot ---
