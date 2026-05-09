@@ -1,0 +1,4 @@
+squares
+data/
+*.db
+*.db-journal

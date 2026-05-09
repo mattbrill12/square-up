@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+
+# server
+server/squares
+server/data/
+server/*.db
+server/*.db-journal
+
+# fly
+fly.toml.local
