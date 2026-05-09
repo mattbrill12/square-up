@@ -43,21 +43,7 @@
   .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
   .legend .chip { display: flex; align-items: center; gap: 6px; font-size: 13px; }
   .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
-  .grid-wrap { overflow: auto; }
-  #boardSection.sticky-board {
-    position: sticky;
-    top: 8px;
-    z-index: 5;
-    max-height: calc(100vh - 16px);
-    display: flex;
-    flex-direction: column;
-    backdrop-filter: blur(4px);
-    background: rgba(24, 27, 34, 0.96);
-  }
-  #boardSection.sticky-board .grid-wrap {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
+  .grid-wrap { overflow-x: auto; }
   table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 640px; }
   th, td {
     border: 1px solid var(--line); padding: 0; text-align: center;
@@ -173,7 +159,7 @@
   </div>
 
   <!-- BOARD -->
-  <div id="boardSection" class="panel hidden-section sticky-board">
+  <div id="boardSection" class="panel hidden-section">
     <div class="footer-bar" style="margin-bottom: 10px;">
       <div class="legend" id="legend"></div>
       <div style="display: flex; gap: 6px;">
