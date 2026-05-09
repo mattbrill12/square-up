@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Basketball Squares — Wolves vs Spurs</title>
+<style>
+  :root {
+    --wolves: #0c2340;
+    --wolves-accent: #78be20;
+    --spurs: #000000;
+    --spurs-accent: #c4ced4;
+    --bg: #0f1115;
+    --panel: #181b22;
+    --line: #2a2f3a;
+    --text: #f4f6fa;
+    --muted: #a0a8b8;
+    --gold: #ffcc33;
+    --hit: #ff4d4d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 12px; letter-spacing: 0.5px; }
+  h1 span.wolves { color: var(--wolves-accent); }
+  h1 span.spurs { color: var(--spurs-accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input[type="text"], input[type="number"] {
+    width: 100%; background: #0c0e13; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; font-size: 15px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 140px; }
+  button {
+    background: var(--gold); color: #111; border: 0; border-radius: 8px;
+    padding: 10px 14px; font-weight: 700; font-size: 14px; cursor: pointer;
+  }
+  button.secondary { background: #2a2f3a; color: var(--text); }
+  button.danger { background: #5a1a1a; color: #ffd9d9; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+  .legend .chip { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+  .grid-wrap { overflow-x: auto; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 640px; }
+  th, td {
+    border: 1px solid var(--line); padding: 0; text-align: center;
+    font-size: 12px; vertical-align: middle;
+  }
+  th.corner { background: transparent; border: none; }
+  th.team-label {
+    background: transparent; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px; font-size: 11px;
+  }
+  th.team-label.wolves-row { color: var(--wolves-accent); writing-mode: vertical-rl; transform: rotate(180deg); padding: 4px; }
+  th.team-label.spurs-col { color: var(--spurs-accent); padding: 4px 0; }
+  th.digit {
+    background: #20242d; color: var(--text); font-weight: 700; font-size: 14px;
+    width: 36px; height: 36px;
+  }
+  th.digit.hidden { color: transparent; }
+  th.digit.hidden::after { content: "?"; color: var(--muted); font-weight: 400; }
+  td.cell {
+    width: 64px; height: 64px;
+    cursor: default; transition: transform 0.08s ease;
+  }
+  td.cell .name { font-weight: 600; font-size: 11px; line-height: 1.1; padding: 2px; }
+  td.cell .pos { font-size: 9px; color: rgba(255,255,255,0.55); }
+  td.cell.win-q1, td.cell.win-q2, td.cell.win-q3, td.cell.win-final {
+    box-shadow: inset 0 0 0 3px var(--gold);
+  }
+  td.cell .winner-badge {
+    display: block; font-size: 9px; color: var(--gold); font-weight: 700; margin-top: 2px;
+  }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .controls > .field { flex: 1 1 120px; }
+  .scoreboard { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .score-card { background: #0c0e13; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  .score-card .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .score-card .val { font-size: 26px; font-weight: 800; }
+  .winners { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .winner-line {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #0c0e13; border: 1px solid var(--line); border-left: 4px solid var(--gold);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px;
+  }
+  .winner-line .qtr { color: var(--gold); font-weight: 700; }
+  .winner-line .who { font-weight: 700; }
+  .winner-line .digits { color: var(--muted); }
+  .hidden-section { display: none; }
+  .note { color: var(--muted); font-size: 12px; line-height: 1.4; }
+  .footer-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏀 Basketball Squares — <span class="wolves">Wolves</span> vs <span class="spurs">Spurs</span></h1>
+
+  <!-- SETUP -->
+  <div id="setup" class="panel">
+    <label>4 Player names (25 squares each)</label>
+    <div class="row" style="margin-bottom: 10px;">
+      <input id="p0" type="text" placeholder="Player 1" maxlength="14" />
+      <input id="p1" type="text" placeholder="Player 2" maxlength="14" />
+      <input id="p2" type="text" placeholder="Player 3" maxlength="14" />
+      <input id="p3" type="text" placeholder="Player 4" maxlength="14" />
+    </div>
+    <div class="row">
+      <button id="generateBtn">Generate Board</button>
+      <button id="loadDemoBtn" class="secondary">Demo Names</button>
+    </div>
+    <p class="note" style="margin-top: 10px;">
+      Squares are randomly assigned. Numbers (0–9) are hidden until you reveal them — that's the fair way: assign people first, reveal digits second.
+    </p>
+  </div>
+
+  <!-- BOARD -->
+  <div id="boardSection" class="panel hidden-section">
+    <div class="footer-bar" style="margin-bottom: 10px;">
+      <div class="legend" id="legend"></div>
+      <div style="display: flex; gap: 6px;">
+        <button id="revealBtn">Reveal Numbers</button>
+        <button id="resetBtn" class="danger">Reset</button>
+      </div>
+    </div>
+
+    <div class="grid-wrap">
+      <table id="board" aria-label="Squares board"></table>
+    </div>
+
+    <p class="note" id="boardHint" style="margin-top: 8px;">
+      Rows = <span style="color: var(--wolves-accent);">Wolves</span> last digit. Columns = <span style="color: var(--spurs-accent);">Spurs</span> last digit.
+    </p>
+  </div>
+
+  <!-- SCORING -->
+  <div id="scoringSection" class="panel hidden-section">
+    <div class="controls">
+      <div class="field">
+        <label>Wolves score</label>
+        <input id="wolvesScore" type="number" min="0" max="200" inputmode="numeric" />
+      </div>
+      <div class="field">
+        <label>Spurs score</label>
+        <input id="spursScore" type="number" min="0" max="200" inputmode="numeric" />
+      </div>
+      <div class="field">
+        <label>Quarter</label>
+        <select id="quarter" style="width: 100%; padding: 10px; background: #0c0e13; color: var(--text); border: 1px solid var(--line); border-radius: 8px; font-size: 15px;">
+          <option value="q1">End of Q1</option>
+          <option value="q2">Halftime (Q2)</option>
+          <option value="q3">End of Q3</option>
+          <option value="final">Final</option>
+        </select>
+      </div>
+      <button id="recordBtn">Record Winner</button>
+    </div>
+
+    <div class="scoreboard">
+      <div class="score-card">
+        <div class="lbl">Wolves</div>
+        <div class="val" id="wolvesDisp">--</div>
+      </div>
+      <div class="score-card">
+        <div class="lbl">Spurs</div>
+        <div class="val" id="spursDisp">--</div>
+      </div>
+    </div>
+
+    <div class="winners" id="winners"></div>
+  </div>
+</div>
+
+<script>
+  const COLORS = ['#e63946', '#2a9d8f', '#f4a261', '#a06cd5'];
+  const QUARTER_LABELS = { q1: 'Q1', q2: 'Halftime', q3: 'Q3', final: 'Final' };
+
+  const STATE_KEY = 'bball-squares-v1';
+
+  /** @type {{ players:string[], assignments:number[], rowDigits:number[], colDigits:number[], revealed:boolean, winners:Record<string,{wolves:number,spurs:number,row:number,col:number,playerIdx:number}> } | null} */
+  let state = null;
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STATE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch { return null; }
+  }
+  function saveState() {
+    if (state) localStorage.setItem(STATE_KEY, JSON.stringify(state));
+  }
+  function clearState() {
+    localStorage.removeItem(STATE_KEY);
+  }
+
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function generate(players) {
+    // 100 cells, 25 per player. Indices 0..99 mapped to player 0..3.
+    const indices = shuffle([...Array(100).keys()]);
+    const assignments = new Array(100);
+    for (let i = 0; i < 100; i++) {
+      assignments[indices[i]] = Math.floor(i / 25);
+    }
+    const rowDigits = shuffle([0,1,2,3,4,5,6,7,8,9]);
+    const colDigits = shuffle([0,1,2,3,4,5,6,7,8,9]);
+    state = {
+      players: players.slice(),
+      assignments,
+      rowDigits,
+      colDigits,
+      revealed: false,
+      winners: {}
+    };
+    saveState();
+  }
+
+  function el(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    Object.entries(props).forEach(([k, v]) => {
+      if (k === 'class') node.className = v;
+      else if (k === 'style') node.style.cssText = v;
+      else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v);
+    });
+    (Array.isArray(children) ? children : [children]).forEach(c => {
+      if (c == null) return;
+      node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    });
+    return node;
+  }
+
+  function renderLegend() {
+    const legend = document.getElementById('legend');
+    legend.innerHTML = '';
+    state.players.forEach((name, i) => {
+      const chip = el('div', { class: 'chip' }, [
+        el('span', { class: 'swatch', style: `background: ${COLORS[i]}` }),
+        document.createTextNode(`${name} — 25 sq`)
+      ]);
+      legend.appendChild(chip);
+    });
+  }
+
+  function renderBoard() {
+    const table = document.getElementById('board');
+    table.innerHTML = '';
+
+    const trTop = document.createElement('tr');
+    trTop.appendChild(el('th', { class: 'corner' }));
+    trTop.appendChild(el('th', { class: 'corner' }));
+    const spurLabel = el('th', { class: 'team-label spurs-col', colspan: '10' }, 'Spurs →');
+    trTop.appendChild(spurLabel);
+    table.appendChild(trTop);
+
+    const trDigits = document.createElement('tr');
+    trDigits.appendChild(el('th', { class: 'corner' }));
+    trDigits.appendChild(el('th', { class: 'corner' }));
+    for (let c = 0; c < 10; c++) {
+      const cls = 'digit' + (state.revealed ? '' : ' hidden');
+      trDigits.appendChild(el('th', { class: cls }, String(state.colDigits[c])));
+    }
+    table.appendChild(trDigits);
+
+    for (let r = 0; r < 10; r++) {
+      const tr = document.createElement('tr');
+      if (r === 0) {
+        const wolvesLabel = el('th', { class: 'team-label wolves-row', rowspan: '10' }, '↓ Wolves');
+        tr.appendChild(wolvesLabel);
+      }
+      const cls = 'digit' + (state.revealed ? '' : ' hidden');
+      tr.appendChild(el('th', { class: cls }, String(state.rowDigits[r])));
+
+      for (let c = 0; c < 10; c++) {
+        const idx = r * 10 + c;
+        const playerIdx = state.assignments[idx];
+        const winLabels = [];
+        Object.entries(state.winners).forEach(([q, w]) => {
+          if (w.row === r && w.col === c) winLabels.push(QUARTER_LABELS[q]);
+        });
+        const cellClasses = ['cell'];
+        winLabels.forEach((_, i) => cellClasses.push(`win-q${i+1}`));
+        if (winLabels.length > 0) cellClasses.push('win-q1');
+
+        const cell = el('td', {
+          class: cellClasses.join(' '),
+          style: `background: ${COLORS[playerIdx]}33; border-left: 3px solid ${COLORS[playerIdx]};`
+        }, [
+          el('div', { class: 'name' }, state.players[playerIdx]),
+          winLabels.length > 0
+            ? el('div', { class: 'winner-badge' }, '★ ' + winLabels.join(' / '))
+            : null
+        ]);
+        tr.appendChild(cell);
+      }
+      table.appendChild(tr);
+    }
+  }
+
+  function renderWinners() {
+    const w = document.getElementById('winners');
+    w.innerHTML = '';
+    const order = ['q1', 'q2', 'q3', 'final'];
+    order.forEach(q => {
+      const win = state.winners[q];
+      if (!win) return;
+      const line = el('div', { class: 'winner-line' }, [
+        el('span', { class: 'qtr' }, QUARTER_LABELS[q]),
+        el('span', { class: 'who', style: `color: ${COLORS[win.playerIdx]}` }, state.players[win.playerIdx]),
+        el('span', { class: 'digits' }, `Wolves ${win.wolves} · Spurs ${win.spurs} → (${state.rowDigits[win.row]}, ${state.colDigits[win.col]})`)
+      ]);
+      w.appendChild(line);
+    });
+  }
+
+  function renderScores() {
+    const ws = document.getElementById('wolvesDisp');
+    const ss = document.getElementById('spursDisp');
+    const wInput = document.getElementById('wolvesScore');
+    const sInput = document.getElementById('spursScore');
+    ws.textContent = wInput.value || '--';
+    ss.textContent = sInput.value || '--';
+  }
+
+  function showBoard() {
+    document.getElementById('setup').classList.add('hidden-section');
+    document.getElementById('boardSection').classList.remove('hidden-section');
+    document.getElementById('scoringSection').classList.toggle('hidden-section', !state.revealed);
+    renderLegend();
+    renderBoard();
+    renderWinners();
+    renderScores();
+    document.getElementById('revealBtn').disabled = state.revealed;
+    document.getElementById('revealBtn').textContent = state.revealed ? 'Numbers Revealed' : 'Reveal Numbers';
+  }
+
+  function showSetup() {
+    document.getElementById('setup').classList.remove('hidden-section');
+    document.getElementById('boardSection').classList.add('hidden-section');
+    document.getElementById('scoringSection').classList.add('hidden-section');
+  }
+
+  // --- Event wiring ---
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    const names = [0,1,2,3].map(i => document.getElementById('p'+i).value.trim() || `Player ${i+1}`);
+    generate(names);
+    showBoard();
+  });
+
+  document.getElementById('loadDemoBtn').addEventListener('click', () => {
+    const demo = ['Matt', 'Mike', 'Jay', 'Chris'];
+    demo.forEach((n, i) => document.getElementById('p'+i).value = n);
+  });
+
+  document.getElementById('revealBtn').addEventListener('click', () => {
+    state.revealed = true;
+    saveState();
+    showBoard();
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    if (!confirm('Reset the board? This wipes assignments and winners.')) return;
+    clearState();
+    state = null;
+    [0,1,2,3].forEach(i => document.getElementById('p'+i).value = '');
+    showSetup();
+  });
+
+  document.getElementById('recordBtn').addEventListener('click', () => {
+    const wolves = parseInt(document.getElementById('wolvesScore').value, 10);
+    const spurs = parseInt(document.getElementById('spursScore').value, 10);
+    const q = document.getElementById('quarter').value;
+    if (Number.isNaN(wolves) || Number.isNaN(spurs)) {
+      alert('Enter both scores first.');
+      return;
+    }
+    const wDigit = wolves % 10;
+    const sDigit = spurs % 10;
+    const row = state.rowDigits.indexOf(wDigit);
+    const col = state.colDigits.indexOf(sDigit);
+    const cellIdx = row * 10 + col;
+    const playerIdx = state.assignments[cellIdx];
+    state.winners[q] = { wolves, spurs, row, col, playerIdx };
+    saveState();
+    renderBoard();
+    renderWinners();
+    renderScores();
+  });
+
+  ['wolvesScore', 'spursScore'].forEach(id => {
+    document.getElementById(id).addEventListener('input', renderScores);
+  });
+
+  // --- Boot ---
+  state = loadState();
+  if (state && state.players && state.assignments) {
+    showBoard();
+  } else {
+    showSetup();
+  }
+</script>
+</body>
+</html>
