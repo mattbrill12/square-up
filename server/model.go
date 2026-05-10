@@ -4,20 +4,59 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
+// isHalftimeDetail returns true when ESPN's status detail describes halftime —
+// no real gameplay, so we don't sample bubble history during this window.
+func isHalftimeDetail(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "halftime") ||
+		strings.Contains(d, "half time") ||
+		strings.Contains(d, "half-time")
+}
+
+// parseQuarterIndex returns 1..4 for normal quarters, 5+ for OT, or 0 if the
+// detail doesn't describe a quarter. Halftime is grouped with Q2 so we sample
+// the end-of-Q2 score at the start of Q3.
+func parseQuarterIndex(detail string) int {
+	d := strings.ToLower(detail)
+	if strings.Contains(d, "halftime") || strings.Contains(d, "half time") {
+		return 2
+	}
+	switch {
+	case strings.Contains(d, "1st") || strings.HasPrefix(d, "q1") || strings.Contains(d, " q1 "):
+		return 1
+	case strings.Contains(d, "2nd") || strings.HasPrefix(d, "q2") || strings.Contains(d, " q2 "):
+		return 2
+	case strings.Contains(d, "3rd") || strings.HasPrefix(d, "q3") || strings.Contains(d, " q3 "):
+		return 3
+	case strings.Contains(d, "4th") || strings.HasPrefix(d, "q4") || strings.Contains(d, " q4 "):
+		return 4
+	case strings.HasPrefix(d, "ot") || strings.Contains(d, "overtime"):
+		return 5
+	}
+	return 0
+}
+
 const (
-	BoardCells               = 100
-	DefaultBubbleIntervalSec = 60
+	BoardCells = 100
+	// 0 is the sentinel for "end of quarter" mode — sample only when ESPN's
+	// detail crosses into a new quarter.
+	DefaultBubbleIntervalSec = 0
 	MinBubbleIntervalSec     = 30
 	MaxBubbleIntervalSec     = 1800
 	MaxBubbleHistory         = 500
 )
 
 type Player struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Color   string `json:"color"`
+	// Claimed is true once a real device has self-joined this seat or
+	// taken it over via the claim endpoint. Host-added preset seats start false
+	// so they're up for grabs until someone with the share link takes them.
+	Claimed bool `json:"claimed"`
 }
 
 type GameInfo struct {
@@ -76,7 +115,7 @@ type Pool struct {
 }
 
 func newPoolState(game *GameInfo, intervalSec int) PoolState {
-	if intervalSec <= 0 {
+	if intervalSec < 0 {
 		intervalSec = DefaultBubbleIntervalSec
 	}
 	return PoolState{
@@ -103,10 +142,12 @@ func (s *PoolState) ensureInvariants() {
 	if s.BubbleHistory == nil {
 		s.BubbleHistory = []BubbleEntry{}
 	}
-	if s.BubbleIntervalSec < MinBubbleIntervalSec {
+	// 0 is allowed (EOQ mode). Anything else gets clamped to the time range.
+	if s.BubbleIntervalSec < 0 {
 		s.BubbleIntervalSec = DefaultBubbleIntervalSec
-	}
-	if s.BubbleIntervalSec > MaxBubbleIntervalSec {
+	} else if s.BubbleIntervalSec > 0 && s.BubbleIntervalSec < MinBubbleIntervalSec {
+		s.BubbleIntervalSec = MinBubbleIntervalSec
+	} else if s.BubbleIntervalSec > MaxBubbleIntervalSec {
 		s.BubbleIntervalSec = MaxBubbleIntervalSec
 	}
 }
@@ -200,12 +241,12 @@ func (s *PoolState) ApplyHostPatch(raw json.RawMessage) error {
 	if p.Revealed != nil {
 		s.Revealed = *p.Revealed
 		if s.Revealed {
-			if len(s.RowDigits) != 10 {
-				s.RowDigits = randomDigits()
+			if len(s.Players) < 2 {
+				return errors.New("need at least 2 players before locking the board")
 			}
-			if len(s.ColDigits) != 10 {
-				s.ColDigits = randomDigits()
-			}
+			s.Assignments = randomAssignments(s.Players)
+			s.RowDigits = randomDigits()
+			s.ColDigits = randomDigits()
 		}
 	}
 	if p.BubbleIntervalSec != nil {

@@ -95,9 +95,12 @@ func (s *Server) handleGames(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	games, err := s.espn.FetchScoreboard(ctx)
-	if err != nil {
+	if err != nil && !IsMockEnabled() {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	if IsMockEnabled() {
+		games = append([]GameSummary{MockGameSummary()}, games...)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"games": games})
 }
@@ -106,9 +109,10 @@ func (s *Server) handleGames(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		EventID           string `json:"eventId"`
-		HostName          string `json:"hostName"`
-		BubbleIntervalSec int    `json:"bubbleIntervalSec"`
+		EventID           string   `json:"eventId"`
+		HostName          string   `json:"hostName"`
+		BubbleIntervalSec int      `json:"bubbleIntervalSec"`
+		AdditionalPlayers []string `json:"additionalPlayers"`
 	}
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
@@ -125,12 +129,26 @@ func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-	defer cancel()
-	_, game, err := s.espn.FetchSummary(ctx, body.EventID)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "fetch game: "+err.Error())
-		return
+	var game *GameInfo
+	if IsMockEventID(body.EventID) {
+		if !IsMockEnabled() {
+			writeErr(w, http.StatusBadRequest, "mock event ids require MOCK_LIVE=1")
+			return
+		}
+		game = MockGameInfo(body.EventID)
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		live, fetched, err := s.espn.FetchSummary(ctx, body.EventID)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "fetch game: "+err.Error())
+			return
+		}
+		if live != nil && live.State == "post" {
+			writeErr(w, http.StatusBadRequest, "this game has already ended; pick a current or upcoming game")
+			return
+		}
+		game = fetched
 	}
 
 	state := newPoolState(game, body.BubbleIntervalSec)
@@ -140,10 +158,29 @@ func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updatedPool, hostPlayer, hostPlayerToken, err := s.store.AddPlayer(pool.ID, hostName)
+	updatedPool, hostPlayer, hostPlayerToken, err := s.store.AddPlayer(pool.ID, hostName, true)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "add host player: "+err.Error())
 		return
+	}
+
+	// Optional preset members — created as unclaimed seats so others can take them.
+	for _, raw := range body.AdditionalPlayers {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if len(name) > 24 {
+			name = name[:24]
+		}
+		if name == hostName {
+			continue
+		}
+		p, _, _, addErr := s.store.AddPlayer(pool.ID, name, false)
+		if addErr != nil {
+			continue
+		}
+		updatedPool = p
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -229,7 +266,7 @@ func (s *Server) handleJoinPool(w http.ResponseWriter, r *http.Request, id strin
 	if len(name) > 24 {
 		name = name[:24]
 	}
-	pool, player, token, err := s.store.AddPlayer(id, name)
+	pool, player, token, err := s.store.AddPlayer(id, name, true)
 	if errors.Is(err, ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "pool not found")
 		return
@@ -241,6 +278,128 @@ func (s *Server) handleJoinPool(w http.ResponseWriter, r *http.Request, id strin
 	s.hub.Broadcast(id, map[string]any{"type": "state", "pool": pool})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"playerId":    player.ID,
+		"playerToken": token,
+		"state":       pool.State,
+	})
+}
+
+// --- PATCH /api/pools/:id/players/:playerId ---
+
+func (s *Server) handleRenamePlayer(w http.ResponseWriter, r *http.Request, id, playerID string) {
+	auth, err := s.resolveAuth(id, r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !auth.isHost && auth.playerID != playerID {
+		writeErr(w, http.StatusForbidden, "must be host or the player themselves")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<13)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if len(name) > 24 {
+		name = name[:24]
+	}
+	pool, err := s.store.RenamePlayer(id, playerID, name)
+	if errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "pool not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.hub.Broadcast(id, map[string]any{"type": "state", "pool": pool})
+	writeJSON(w, http.StatusOK, pool)
+}
+
+// --- POST /api/pools/:id/snapshot ---
+
+func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request, id string) {
+	auth, err := s.resolveAuth(id, r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !auth.isHost {
+		writeErr(w, http.StatusForbidden, "host token required")
+		return
+	}
+
+	pool, err := s.store.GetPool(id)
+	if errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "pool not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if pool.State.Live == nil || pool.State.Live.State != "in" {
+		writeErr(w, http.StatusBadRequest, "snapshots only during live gameplay")
+		return
+	}
+	if isHalftimeDetail(pool.State.Live.Detail) {
+		writeErr(w, http.StatusBadRequest, "snapshots paused during halftime")
+		return
+	}
+	if !pool.State.Revealed {
+		writeErr(w, http.StatusBadRequest, "lock the board first")
+		return
+	}
+
+	updated, ok, err := s.store.AppendBubbleSnapshot(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "no bubble to snapshot")
+		return
+	}
+	s.hub.Broadcast(id, map[string]any{"type": "state", "pool": updated})
+	writeJSON(w, http.StatusOK, updated)
+}
+
+// --- POST /api/pools/:id/players/:playerId/claim ---
+
+func (s *Server) handleClaimPlayer(w http.ResponseWriter, r *http.Request, id, playerID string) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if r.ContentLength > 0 {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<13)).Decode(&body)
+	}
+	name := strings.TrimSpace(body.Name)
+	if len(name) > 24 {
+		name = name[:24]
+	}
+	pool, token, err := s.store.ClaimPlayer(id, playerID, name)
+	if errors.Is(err, ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "pool not found")
+		return
+	}
+	if errors.Is(err, errSeatTaken) {
+		writeErr(w, http.StatusConflict, "seat already taken")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.hub.Broadcast(id, map[string]any{"type": "state", "pool": pool})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"playerId":    playerID,
 		"playerToken": token,
 		"state":       pool.State,
 	})

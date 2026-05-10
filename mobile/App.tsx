@@ -1,4 +1,4 @@
-import { NavigationContainer, type Theme } from '@react-navigation/native';
+import { NavigationContainer, type LinkingOptions, type Theme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -17,6 +17,18 @@ export type RootStackParamList = {
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+const linking: LinkingOptions<RootStackParamList> = {
+  prefixes: ['squareup://', '/'],
+  config: {
+    screens: {
+      Home: '',
+      Create: 'create',
+      Join: 'join/:poolId',
+      Pool: 'p/:poolId',
+    },
+  },
+};
 
 const navTheme: Theme = {
   dark: true,
@@ -39,7 +51,7 @@ const navTheme: Theme = {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <NavigationContainer theme={navTheme}>
+      <NavigationContainer theme={navTheme} linking={linking}>
         <Stack.Navigator
           screenOptions={{
             headerStyle: { backgroundColor: palette.panel },
@@ -50,7 +62,7 @@ export default function App() {
           <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'Square Up' }} />
           <Stack.Screen name="Create" component={CreateScreen} options={{ title: 'New Pool' }} />
           <Stack.Screen name="Join" component={JoinScreen} options={{ title: 'Join Pool' }} />
-          <Stack.Screen name="Pool" component={PoolScreen} options={{ title: 'Pool' }} />
+          <Stack.Screen name="Pool" component={PoolScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
       </NavigationContainer>
       <StatusBar style="light" />

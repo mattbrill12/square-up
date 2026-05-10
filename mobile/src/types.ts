@@ -1,4 +1,10 @@
-export type Player = { id: string; name: string; color: string };
+export type Player = {
+  id: string;
+  name: string;
+  color: string;
+  /** True once a real device is using this seat. Preset host-added seats start false. */
+  claimed: boolean;
+};
 
 export type GameInfo = {
   eventId: string;

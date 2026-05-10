@@ -1,0 +1,21 @@
+.git
+.gitignore
+.DS_Store
+*.log
+.env
+.env.local
+
+# server build output and local state
+server/squares
+server/data/
+server/*.db
+server/*.db-journal
+
+# mobile build output
+mobile/node_modules
+mobile/dist
+mobile/.expo
+mobile/.expo-shared
+
+# legacy
+index.html

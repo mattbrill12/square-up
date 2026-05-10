@@ -24,6 +24,7 @@ func main() {
 	addr := ":" + env("PORT", "8080")
 	dbPath := env("DB_PATH", "./data/squares.db")
 	allowedOrigin := env("ALLOWED_ORIGIN", "*")
+	staticDir := env("STATIC_DIR", "")
 
 	if dir := filepath.Dir(dbPath); dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
@@ -47,6 +48,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+
+	if staticDir != "" {
+		mux.Handle("/", spaHandler(staticDir))
+	}
 
 	mux.HandleFunc("/api/games/today", func(w http.ResponseWriter, r *http.Request) {
 		setCORS(w, allowedOrigin)
@@ -116,6 +121,18 @@ func main() {
 					return
 				}
 				srv.handleJoinPool(w, r, id)
+			case "mock-live":
+				if r.Method != http.MethodPost {
+					writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				srv.handleMockLive(w, r, id)
+			case "snapshot":
+				if r.Method != http.MethodPost {
+					writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				srv.handleSnapshot(w, r, id)
 			default:
 				writeErr(w, http.StatusNotFound, "not found")
 			}
@@ -123,11 +140,14 @@ func main() {
 			// /api/pools/:id/players/:playerId  or  /api/pools/:id/squares/:idx
 			if parts[1] == "players" {
 				playerID := parts[2]
-				if r.Method != http.MethodDelete {
+				switch r.Method {
+				case http.MethodDelete:
+					srv.handleRemovePlayer(w, r, id, playerID)
+				case http.MethodPatch:
+					srv.handleRenamePlayer(w, r, id, playerID)
+				default:
 					writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-					return
 				}
-				srv.handleRemovePlayer(w, r, id, playerID)
 				return
 			}
 			if parts[1] == "squares" {
@@ -141,13 +161,23 @@ func main() {
 			}
 			writeErr(w, http.StatusNotFound, "not found")
 		case 4:
-			// /api/pools/:id/players/:playerId/push-token  or  /api/pools/:id/squares/:idx/claim
+			// /api/pools/:id/players/:playerId/push-token
+			// /api/pools/:id/players/:playerId/claim
+			// /api/pools/:id/squares/:idx/claim
 			if parts[1] == "players" && parts[3] == "push-token" {
 				if r.Method != http.MethodPost {
 					writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 					return
 				}
 				srv.handleSetPushToken(w, r, id, parts[2])
+				return
+			}
+			if parts[1] == "players" && parts[3] == "claim" {
+				if r.Method != http.MethodPost {
+					writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+					return
+				}
+				srv.handleClaimPlayer(w, r, id, parts[2])
 				return
 			}
 			if parts[1] == "squares" && parts[3] == "claim" {
@@ -176,7 +206,7 @@ func main() {
 	go poller.Run(ctx)
 
 	go func() {
-		log.Printf("listening on %s (db=%s)", addr, dbPath)
+		log.Printf("listening on %s (db=%s static=%q)", addr, dbPath, staticDir)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen: %v", err)
 		}
@@ -187,6 +217,31 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = httpSrv.Shutdown(shutCtx)
+}
+
+// spaHandler serves files from staticDir with an index.html fallback for unknown paths.
+func spaHandler(staticDir string) http.Handler {
+	fileServer := http.FileServer(http.Dir(staticDir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		clean := filepath.Clean(r.URL.Path)
+		full := filepath.Join(staticDir, clean)
+		info, err := os.Stat(full)
+		if err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// SPA fallback.
+		index := filepath.Join(staticDir, "index.html")
+		if _, err := os.Stat(index); err == nil {
+			http.ServeFile(w, r, index)
+			return
+		}
+		http.NotFound(w, r)
+	})
 }
 
 func setCORS(w http.ResponseWriter, allowedOrigin string) {

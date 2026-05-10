@@ -9,7 +9,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var ErrNotFound = errors.New("pool not found")
+var (
+	ErrNotFound  = errors.New("pool not found")
+	errSeatTaken = errors.New("seat already taken")
+)
 
 type Store struct {
 	db *sql.DB
@@ -122,15 +125,18 @@ func (s *Store) SaveState(id string, state PoolState) (*Pool, error) {
 	return s.GetPool(id)
 }
 
-// AddPlayer creates a player inside a pool with a fresh token. Returns the new player + its token.
-func (s *Store) AddPlayer(poolID, name string) (*Pool, *Player, string, error) {
+// AddPlayer creates a player inside a pool with a fresh token. Returns the new
+// player + its token. The `claimed` flag should be true when a real device is
+// taking the seat (self-join, host themselves) and false for host-created
+// preset seats waiting to be claimed by someone else.
+func (s *Store) AddPlayer(poolID, name string, claimed bool) (*Pool, *Player, string, error) {
 	pool, err := s.GetPool(poolID)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	playerID := randomHex(4)
 	color := pickColor(len(pool.State.Players))
-	player := Player{ID: playerID, Name: name, Color: color}
+	player := Player{ID: playerID, Name: name, Color: color, Claimed: claimed}
 	if err := pool.State.AddPlayer(player); err != nil {
 		return nil, nil, "", err
 	}
@@ -203,6 +209,132 @@ func (s *Store) RemovePlayer(poolID, playerID string) (*Pool, error) {
 	}
 	pool.UpdatedAt = now
 	return pool, nil
+}
+
+// RenamePlayer updates the display name for an existing player without
+// touching tokens. Returns the updated pool.
+func (s *Store) RenamePlayer(poolID, playerID, name string) (*Pool, error) {
+	pool, err := s.GetPool(poolID)
+	if err != nil {
+		return nil, err
+	}
+	idx := -1
+	for i, p := range pool.State.Players {
+		if p.ID == playerID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, errors.New("player not found")
+	}
+	pool.State.Players[idx].Name = name
+
+	stateJSON, err := json.Marshal(pool.State)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(
+		`UPDATE pools SET state = ?, updated_at = ? WHERE id = ?`,
+		string(stateJSON), now, poolID,
+	); err != nil {
+		return nil, err
+	}
+	pool.UpdatedAt = now
+	return pool, nil
+}
+
+// AppendBubbleSnapshot records the current bubble state immediately. Returns
+// the updated pool and whether a snapshot was actually appended.
+func (s *Store) AppendBubbleSnapshot(poolID string) (*Pool, bool, error) {
+	pool, err := s.GetPool(poolID)
+	if err != nil {
+		return nil, false, err
+	}
+	if pool.State.Live != nil && isHalftimeDetail(pool.State.Live.Detail) {
+		return pool, false, nil
+	}
+	entry := pool.State.ComputeBubble()
+	if entry == nil {
+		return pool, false, nil
+	}
+	pool.State.BubbleHistory = append(pool.State.BubbleHistory, *entry)
+	if len(pool.State.BubbleHistory) > MaxBubbleHistory {
+		pool.State.BubbleHistory = pool.State.BubbleHistory[len(pool.State.BubbleHistory)-MaxBubbleHistory:]
+	}
+	stateJSON, err := json.Marshal(pool.State)
+	if err != nil {
+		return nil, false, err
+	}
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(
+		`UPDATE pools SET state = ?, updated_at = ? WHERE id = ?`,
+		string(stateJSON), now, poolID,
+	); err != nil {
+		return nil, false, err
+	}
+	pool.UpdatedAt = now
+	return pool, true, nil
+}
+
+// ClaimPlayer reissues the token for an existing player and optionally updates the
+// display name. The previous token is invalidated. Returns the updated pool and
+// new token. The pool's WS subscribers should be notified by the caller.
+// Seats that are already claimed by a real device are rejected with
+// errSeatTaken so the host or other players can't be impersonated.
+func (s *Store) ClaimPlayer(poolID, playerID, newName string) (*Pool, string, error) {
+	pool, err := s.GetPool(poolID)
+	if err != nil {
+		return nil, "", err
+	}
+	idx := -1
+	for i, p := range pool.State.Players {
+		if p.ID == playerID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, "", errors.New("player not found")
+	}
+	if pool.State.Players[idx].Claimed {
+		return nil, "", errSeatTaken
+	}
+	if newName != "" {
+		pool.State.Players[idx].Name = newName
+	}
+	pool.State.Players[idx].Claimed = true
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stateJSON, err := json.Marshal(pool.State)
+	if err != nil {
+		return nil, "", err
+	}
+	now := time.Now().Unix()
+	if _, err := tx.Exec(
+		`UPDATE pools SET state = ?, updated_at = ? WHERE id = ?`,
+		string(stateJSON), now, poolID,
+	); err != nil {
+		return nil, "", err
+	}
+	newToken := randomHex(16)
+	if _, err := tx.Exec(
+		`UPDATE player_tokens SET token = ?, push_token = NULL WHERE pool_id = ? AND player_id = ?`,
+		newToken, poolID, playerID,
+	); err != nil {
+		return nil, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, "", err
+	}
+	pool.UpdatedAt = now
+	return pool, newToken, nil
 }
 
 // PlayerByToken returns (poolID, playerID) for the given token, or empty strings if not found.
